@@ -1,0 +1,184 @@
+---
+
+- name: Create a virtual machine and configure as a build environment in Azure
+  hosts: localhost
+
+  vars:
+    ansible_python_interpreter: /opt/homebrew/Cellar/python@3.11/3.11.6_1/Frameworks/Python.framework/Versions/3.11/bin/python3.11
+    resourceGroupName: my-group-rg
+    location: australiaeast
+    network:
+      name: vnet
+      cidr: 10.0.0.0/22
+      subnet:
+        name: vm-subnet
+        cidr: 10.0.0.0/24
+      nsg:
+        name: vm-nsg
+    vm:
+      ssh_key_path: '~/.ssh/id_rsa.pub'
+      ssh_priv_key_path: '~/.ssh/id_rsa'
+      size: Standard_B1s
+      name: build-vm
+      public_ip:
+        enable: true
+        name: build-vm-pip
+      nic:
+        name: build-vm-nic
+      image:
+        offer: 0001-com-ubuntu-server-jammy
+        sku: 22_04-lts
+    default:
+      shell: /bin/bash
+  
+  tasks:
+
+    - name: Get the current user name
+      ansible.builtin.command: whoami
+      register: userdetails
+    
+    - name: Confirm that the ssh_key_file exists
+      ansible.builtin.stat:
+        path: "{{ vm.ssh_key_path }}"
+      register: ssh_key_file
+
+    - name: Fail if the ssh_key_file does not exist
+      ansible.builtin.fail:
+        msg: ssh_key_file.stat.exists == false
+      when: ssh_key_file.stat.exists == false
+    
+    - name: Create a new Azure resource group
+      azure.azcollection.azure_rm_resourcegroup:
+        name: "{{ resourceGroupName }}"
+        location: "{{ location }}"
+      register: rg
+    
+    - name: Create a new Azure virtual network
+      azure.azcollection.azure_rm_virtualnetwork:
+        resource_group: "{{ resourceGroupName }}"
+        name: "{{ network.name }}"
+        address_prefixes: 
+          - "{{ network.cidr }}"
+      register: vnet
+
+    - name: Create a new Network Security Group for the subnet
+      azure.azcollection.azure_rm_securitygroup:
+        resource_group: "{{ resourceGroupName }}"
+        name: "{{ network.nsg.name }}"
+        purge_rules: true
+        rules:
+          - name: AllowSSH
+            protocol: Tcp
+            destination_port_range: 22
+            access: Allow
+            priority: 100
+            direction: Inbound
+      register: nsg
+       
+    - name: Create a new Azure subnet
+      azure.azcollection.azure_rm_subnet:
+        resource_group: "{{ resourceGroupName }}"
+        name: "{{ network.subnet.name }}"
+        address_prefix_cidr: "{{ network.subnet.cidr }}"
+        virtual_network_name: "{{ vnet.state.name }}"
+      register: subnet
+
+    - name: Create an Azure network interface
+      azure.azcollection.azure_rm_networkinterface:
+        name: "{{ vm.nic.name }}"      
+        resource_group: "{{ resourceGroupName }}"
+        virtual_network: "{{ vnet.state.name }}"
+        subnet_name: "{{ subnet.state.name }}"
+        security_group: "{{ nsg.state.name }}"
+        ip_configurations:
+          - name: ipconfig1
+            public_ip_address_name: "{{ vm.public_ip.name }}"
+            primary: true
+      register: nic
+
+    - name: Get the information on the created public IP
+      azure.azcollection.azure_rm_publicipaddress_info:
+        resource_group: "{{ resourceGroupName }}"
+        name: "{{ vm.public_ip.name }}"
+      register: publicIP    
+
+    - name: Create a new Ubuntu virtual machine with SSH key on the created subnet
+      azure.azcollection.azure_rm_virtualmachine:
+        resource_group: "{{ resourceGroupName }}"
+        name: "{{ vm.name }}"
+        vm_size: Standard_B1s
+        admin_username: "{{ userdetails.stdout }}"
+        ssh_password_enabled: false
+        ssh_public_keys:
+          - path: /home/{{ userdetails.stdout }}/.ssh/authorized_keys
+            key_data: "{{lookup('ansible.builtin.file', '{{ vm.ssh_key_path }}') }}"
+        security_profile:
+          encryption_at_host: true
+        network_interfaces: "{{ nic.state.name }}"
+        image:
+          offer: "{{ vm.image.offer }}"
+          publisher: Canonical
+          sku: "{{ vm.image.sku }}"
+          version: latest
+      register: buildvm
+
+    - name: Set the IP address
+      set_fact:
+        buildvm_IP: "{{ publicIP.publicipaddresses[0].ip_address  }}"
+
+    - name: Register buildvm as host
+      ansible.builtin.add_host:
+        hostname: "{{ buildvm_IP  }}"
+        group: created_hosts
+
+    # - name: SSH to the virtual machine and perform an apt update
+    #   ansible.builtin.shell: |
+    #     set timeout 300
+
+    #     ssh -i {{ vm.ssh_priv_key_path }} {{ userdetails.stdout }}@{{ buildvm_IP }} \
+    #       "sudo apt update && sudo apt -y dist-upgrade"
+
+    #     exit 0
+    #   args:
+    #     executable: "{{default.shell}}"
+    #   delegate_to: localhost
+
+    # - name: Install az cli on virtual machine
+    #   ansible.builtin.shell: |
+    #     set timeout 300
+    #     ssh -i {{ vm.ssh_priv_key_path }} {{ userdetails.stdout }}@{{ buildvm_IP }} \
+    #       "curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash"
+
+    #     exit 0
+    #   args:
+    #     executable: "{{default.shell}}"
+       
+- name: Setup build virtual machine
+  hosts: created_hosts
+  become: true
+
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    default:
+      shell: /bin/bash
+
+  tasks:
+
+    - name: Update packages on server
+      apt:
+        upgrade: dist
+
+    - name: Install az cli on virtual machine
+      raw: curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
