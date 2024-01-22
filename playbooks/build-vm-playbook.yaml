@@ -4,8 +4,8 @@
   hosts: localhost
 
   vars:
-    ansible_python_interpreter: /opt/homebrew/Cellar/python@3.11/3.11.6_1/Frameworks/Python.framework/Versions/3.11/bin/python3.11
-    resourceGroupName: my-group-rg
+    ansible_python_interpreter: /opt/homebrew/Cellar/python@3.11/3.11.7_1/Frameworks/Python.framework/Versions/3.11/bin/python3.11
+    resourceGroupName: my-base-rg
     location: australiaeast
     network:
       name: vnet
@@ -17,7 +17,6 @@
         name: vm-nsg
     vm:
       ssh_key_path: '~/.ssh/id_rsa.pub'
-      ssh_priv_key_path: '~/.ssh/id_rsa'
       size: Standard_B1s
       name: build-vm
       public_ip:
@@ -28,8 +27,6 @@
       image:
         offer: 0001-com-ubuntu-server-jammy
         sku: 22_04-lts
-    default:
-      shell: /bin/bash
   
   tasks:
 
@@ -126,10 +123,23 @@
       set_fact:
         buildvm_IP: "{{ publicIP.publicipaddresses[0].ip_address  }}"
 
+    - name: Show IP address
+      debug:
+        msg: "Public IP address is {{ buildvm_IP }}"
+
+    - name: Pause for 30 seconds
+      ansible.builtin.pause:
+        seconds: 30
+
     - name: Register buildvm as host
       ansible.builtin.add_host:
         hostname: "{{ buildvm_IP  }}"
         group: created_hosts
+
+    - name: Add new host to list of known hosts
+      ansible.builtin.shell: |
+        set timeout 300
+        ssh -o StrictHostKeyChecking=no {{ userdetails.stdout }}@{{ buildvm_IP  }} 'echo $USERID'
 
     # - name: SSH to the virtual machine and perform an apt update
     #   ansible.builtin.shell: |
@@ -159,8 +169,11 @@
 
   vars:
     ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_private_key_file: '~/.ssh/id_rsa'
     default:
       shell: /bin/bash
+      temp_dir: '/tmp'
+      bin_dir: '/usr/local/bin'
 
   tasks:
 
@@ -168,17 +181,38 @@
       apt:
         upgrade: dist
 
-    - name: Install az cli on virtual machine
-      raw: curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+    # - name: Install az cli on virtual machine
+    #   raw: curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 
+    - name: Install az cli on host
+      ansible.builtin.shell: |
+        set timeout 300
+        curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+        exit 0
     
-    
-    
-    
-    
-    
-    
-    
-    
+    - name: Install jq and podman packages on host
+      apt:
+        state: present
+        name:
+          - jq
+          - podman
+        update_cache: true
+
+    - name: Install Red Hat oc cli on host
+      ansible.builtin.shell: |
+        set timeout 300
+        TMP_DIR="{{ default.temp_dir }}""
+        BIN_DIR="{{ default.bin_dir }}""
+        ARCH=$(uname -m)
+        OC_FILETYPE="linux"
+        KUBECTL_FILETYPE="linux"
+        OC_URL="https://mirror.openshift.com/pub/openshift-v4/${ARCH}/clients/ocp/latest/openshift-client-${OC_FILETYPE}.tar.gz"
+
+        curl -Lo $TMP_DIR/openshift-client.tgz $OC_URL
+        tar xzf ${TMP_DIR}/openshift-client.tgz -C ${TMP_DIR} oc
+        mv ${TMP_DIR}/oc ${BIN_DIR}/oc
+        rm ${TMP_DIR}/openshift-client.tgz
+        exit 0
+
     
     
