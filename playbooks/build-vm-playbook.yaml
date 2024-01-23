@@ -34,6 +34,12 @@
     - name: Get the current user name
       ansible.builtin.command: whoami
       register: userdetails
+
+    - name: Get the current users internet address
+      ansible.builtin.uri:
+        url: http://checkip.amazonaws.com/
+        return_content: true
+      register: my_ip
     
     - name: Confirm that the ssh_key_file exists
       ansible.builtin.stat:
@@ -77,6 +83,7 @@
             access: Allow
             priority: 100
             direction: Inbound
+            source: {{ my_ip.stdout }}
       register: nsg
        
     - name: Create a new Azure subnet
