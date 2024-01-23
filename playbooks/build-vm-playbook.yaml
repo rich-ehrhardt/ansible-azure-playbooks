@@ -17,6 +17,7 @@
         name: vm-nsg
     vm:
       ssh_key_path: '~/.ssh/id_rsa.pub'
+      ssh_priv_key_path: '/.ssh/id_rsa'
       size: Standard_B1s
       name: build-vm
       public_ip:
@@ -39,10 +40,16 @@
         path: "{{ vm.ssh_key_path }}"
       register: ssh_key_file
 
+   - name: Confirm that the ssh_key_file exists
+      ansible.builtin.stat:
+        path: "{{ vm.ssh_priv_key_path }}"
+      register: ssh_priv_key_file
+
     - name: Fail if the ssh_key_file does not exist
       ansible.builtin.fail:
-        msg: ssh_key_file.stat.exists == false
-      when: ssh_key_file.stat.exists == false
+        msg: "ERORR: Either public or private key not found."
+      when: not ssh_key_file.stat.exists or
+            not ssh_priv_key_file.stat.exists
     
     - name: Create a new Azure resource group
       azure.azcollection.azure_rm_resourcegroup:
@@ -134,12 +141,13 @@
     - name: Register buildvm as host
       ansible.builtin.add_host:
         hostname: "{{ buildvm_IP  }}"
+        key: "{{ vm.ssh_priv_key_file }}"
         group: created_hosts
 
     - name: Add new host to list of known hosts
       ansible.builtin.shell: |
         set timeout 300
-        ssh -o StrictHostKeyChecking=no {{ userdetails.stdout }}@{{ buildvm_IP  }} 'echo $USERID'
+        ssh -o StrictHostKeyChecking=no -i {{ vm.ssh_priv_key_file }} {{ userdetails.stdout }}@{{ buildvm_IP  }} 'echo $USERID'
 
     # - name: SSH to the virtual machine and perform an apt update
     #   ansible.builtin.shell: |
