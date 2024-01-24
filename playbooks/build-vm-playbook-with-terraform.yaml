@@ -75,7 +75,7 @@
         msg: "ERORR: Private key not found."
       when: not ssh_priv_key_file.stat.exists
 
-    - name: Create the azure resource with terraform
+    - name: Create the azure resources with terraform
       community.general.terraform:
         project_path: "{{ terraform_path.build_vm }}"
         state: present
