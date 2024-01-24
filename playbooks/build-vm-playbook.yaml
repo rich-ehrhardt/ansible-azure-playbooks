@@ -37,16 +37,16 @@
 
     - name: Get the current users internet address
       ansible.builtin.uri:
-        url: http://checkip.amazonaws.com/
+        url: "http://checkip.amazonaws.com/"
         return_content: true
       register: my_ip
     
-    - name: Confirm that the ssh_key_file exists
+    - name: Confirm that the SSH public key exists
       ansible.builtin.stat:
         path: "{{ vm.ssh_key_path }}"
       register: ssh_key_file
 
-   - name: Confirm that the ssh_key_file exists
+   - name: Confirm that the SSH private exists
       ansible.builtin.stat:
         path: "{{ vm.ssh_priv_key_path }}"
       register: ssh_priv_key_file
@@ -195,6 +195,7 @@
       terraform: true
       oc: true
       jq: true
+      helm: true
 
   tasks:
 
@@ -228,6 +229,14 @@
           - podman
         update_cache: true
       when: packages.podman
+
+    - name: Install helm package on host
+      apt:
+        state: present
+        name:
+          - helm
+        update_cache: true
+      when: packages.helm
 
     - name: Install Red Hat oc cli on host
       ansible.builtin.shell: |
