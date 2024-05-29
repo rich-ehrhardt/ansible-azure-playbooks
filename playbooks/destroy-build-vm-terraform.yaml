@@ -4,7 +4,7 @@
   hosts: localhost
 
   vars:
-    ansible_python_interpreter: /opt/homebrew/Cellar/python@3.11/3.11.7_1/Frameworks/Python.framework/Versions/3.11/bin/python3.11
+    ansible_python_interpreter: "/opt/homebrew/bin/python3.11"
     terraform_path: 
       build_vm: "../azure/compute/build-vm"
     resourceGroupName: my-base-rg
@@ -43,30 +43,6 @@
         dig -4 TXT +short o-o.myaddr.l.google.com @ns1.google.com | sed 's/\"//g'
         exit 0
       register: my_ip
-
-    - name: Report public IP address
-      debug:
-        msg: "Public IP address of current user is {{ my_ip.stdout }}"
-    
-    - name: Confirm SSH public key exists
-      ansible.builtin.stat:
-        path: "{{ vm.ssh_key_path }}"
-      register: ssh_pub_key_file
-
-    - name: Confirm SSH private key exists
-      ansible.builtin.stat:
-        path: "{{ vm.ssh_priv_key_path }}"
-      register: ssh_priv_key_file
-
-    - name: Fail if the SSH public key does not exist
-      ansible.builtin.fail:
-        msg: "ERORR: Public key not found."
-      when: not ssh_pub_key_file.stat.exists
-
-    - name: Fail if the SSH private key does not exist
-      ansible.builtin.fail:
-        msg: "ERORR: Private key not found."
-      when: not ssh_priv_key_file.stat.exists
 
     - name: Destroy the azure resources with terraform
       community.general.terraform:

@@ -1,0 +1,140 @@
+---
+- name: Build VPN virtual machine
+  hosts: localhost
+  vars: 
+    ansible_python_interpreter: /opt/homebrew/Cellar/python@3.11/3.11.7_1/Frameworks/Python.framework/Versions/3.11/bin/python3.11
+    terraform_path: 
+      build_vm: "../azure/compute/build-vm"
+    resourceGroupName: my-rg
+    location: australiaeast
+    vm:
+      ssh_key_path: '~/.ssh/id_rsa.pub'
+      ssh_priv_key_path: '~/.ssh/id_rsa'
+      size: Standard_B1s
+      name: vpn-gw-vm
+      public_ip:
+        enable: true
+        name: vpn-gw-vm-pip
+      nic:
+        name: vpn-gw-vm-nic
+      image:
+        offer: 0001-com-ubuntu-server-jammy
+        sku: 22_04-lts
+
+  tasks: 
+
+    - name: Get the current user name
+      ansible.builtin.command: whoami
+      register: userdetails
+    
+    - name: Confirm SSH public key exists
+      ansible.builtin.stat:
+        path: "{{ vm.ssh_key_path }}"
+      register: ssh_pub_key_file
+
+    - name: Confirm SSH private key exists
+      ansible.builtin.stat:
+        path: "{{ vm.ssh_priv_key_path }}"
+      register: ssh_priv_key_file
+
+    - name: Fail if the SSH public key does not exist
+      ansible.builtin.fail:
+        msg: "ERORR: Public key not found."
+      when: not ssh_pub_key_file.stat.exists
+
+    - name: Fail if the SSH private key does not exist
+      ansible.builtin.fail:
+        msg: "ERORR: Private key not found."
+      when: not ssh_priv_key_file.stat.exists
+
+    - name: Create the azure resources with terraform
+      community.general.terraform:
+        project_path: "{{ terraform_path.build_vm }}"
+        state: present
+        force_init: true
+        variables:
+          resource_group_name: "{{ resourceGroupName }}"
+          admin_username: "{{ userdetails.stdout }}"
+          location: "{{ location }}"
+          vm_name: "{{ vm.name }}"
+          vm_size: "{{ vm.size }}" 
+          my_ip_address: "{{ my_ip.stdout }}"
+          image_offer: "{{ vm.image.offer }}"
+          image_sku: "{{ vm.image.sku }}"
+
+    - name: Get the information on the created public IP
+      azure.azcollection.azure_rm_publicipaddress_info:
+        resource_group: "{{ resourceGroupName }}"
+        name: "{{ vm.public_ip.name }}"
+      register: publicIP    
+
+    - name: Set the IP address
+      set_fact:
+        vpnVm_IP: "{{ publicIP.publicipaddresses[0].ip_address  }}"
+
+    - name: Show IP address
+      debug:
+        msg: "Public IP address of new VM is {{ vpnVm_IP }}"
+
+    - name: Register buildvm as host
+      ansible.builtin.add_host:
+        hostname: "{{ vpnVm_IP  }}"
+        key: "{{ vm.ssh_priv_key_path }}"
+        group: created_hosts
+
+    - name: Add new host to list of known hosts
+      ansible.builtin.shell: |
+        set timeout 300
+        ssh -o StrictHostKeyChecking=no -i {{ vm.ssh_priv_key_path }} {{ userdetails.stdout }}@{{ vpnVm_IP  }} 'echo $USERID'
+
+- name: Setup VPN virtual machine
+  hosts: created_hosts
+  become: true
+
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_private_key_file: '~/.ssh/id_rsa'
+    default:
+      shell: /bin/bash
+      temp_dir: '/tmp'
+      bin_dir: '/usr/local/bin'
+    vpn_configuration:
+      client_network: 
+        address: '192.168.20.0'
+        bits: 27
+      dns:
+        address: '168.63.129.16'
+      virtual_network:
+        address: '10.0.0.0/20'
+
+  tasks:
+
+    - name: Update packages on server
+      apt:
+        upgrade: dist
+
+    - name: Install az cli on host
+      ansible.builtin.shell: |
+        set timeout 300
+        curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+        exit 0
+      when: packages.az
+
+    - name: Install openVPN server on VM
+      ansible.builtin.shell: |
+        apt update && sudo apt -y install ca-certificates wget net-tools gnupg
+        wget -qO - https://as-repository.openvpn.net/as-repo-public.gpg | sudo apt-key add - 
+        chmod -R 777 /etc/apt/sources.list.d 
+        echo "deb http://as-repository.openvpn.net/as/debian $(lsb_release  -a | grep Codename | awk '{print $2}') main">/etc/apt/sources.list.d/openvpn-as-repo.list
+        apt update && apt -y install openvpn-as
+
+    - name: Set required VPN server parameters
+      ansible.builtin.set_fact:
+        public_ip: hostvars.localhost.vpnVm_IP
+        vm_name: hostvars.localhost.vm.name
+
+    - name: Create the openVPN server configuration
+      template:
+        src: server-config.json.j2
+        dest: "{{ temp_dir }}/server-config.json"
+      
